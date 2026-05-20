@@ -55,7 +55,7 @@ let isEditMode = !currentCoreGroup;
 let autoRefreshTimer = null; 
 let currentRefPrice = 0; 
 
-let globalAllGroups = [], globalAssignments = {}, globalConfirmedOrders = {}; 
+let globalAllGroups = [], globalConfirmedOrders = {}; 
 let globalActiveOrders = {}, globalArchivingOrders = {}, globalArchivedOrders = {}; 
 let globalActiveSellOrders = {}, globalArchivingSellOrders = {}, globalArchivedSellOrders = {};
 let latestConfigs = [], latestBuyAds = [], globalAllAds = [], globalAllPendingOrders = [];
@@ -407,77 +407,6 @@ function processAutoCancelAdsForCancelledOrders() {
 }
 // ============================================
 
-// ====== AUTO GÁN NHÓM ======
-function toggleAutoAssign(isChecked) {
-    let config = JSON.parse(localStorage.getItem('autoAssignConfig') || '{"enabled":false, "group":""}');
-    config.enabled = isChecked;
-    localStorage.setItem('autoAssignConfig', JSON.stringify(config));
-    Toast.fire({ icon: isChecked ? 'success' : 'info', title: isChecked ? 'Đã BẬT Auto Gán Nhóm' : 'Đã TẮT Auto Gán Nhóm' });
-    renderDashboardUI(); 
-    processAutoAssign(); 
-}
-
-function changeAutoAssignGroup(groupName) {
-    let config = JSON.parse(localStorage.getItem('autoAssignConfig') || '{"enabled":false, "group":""}');
-    config.group = groupName;
-    localStorage.setItem('autoAssignConfig', JSON.stringify(config));
-    if (config.enabled && groupName) {
-        Toast.fire({ icon: 'success', title: `Sẽ tự động gán đơn cho: ${groupName}` });
-        processAutoAssign();
-    }
-}
-
-// Thêm biến ổ khóa ở ngoài cùng để chống spam
-let assigningOrders = new Set();
-
-function processAutoAssign() {
-    let config = JSON.parse(localStorage.getItem('autoAssignConfig') || '{"enabled":false, "group":""}');
-    if (!config.enabled || !config.group) return;
-
-    let unassignedOrders = globalAllPendingOrders.filter(po => !globalAssignments[String(po.id)]);
-    
-    if (unassignedOrders.length > 0) {
-        unassignedOrders.forEach((po, index) => {
-            let poIdStr = String(po.id);
-            
-            // Nếu đơn này chưa nằm trong ổ khóa thì mới cho gán
-            if (!assigningOrders.has(poIdStr)) {
-                assigningOrders.add(poIdStr);
-                
-                // Xếp hàng: Đơn 1 gán ngay, Đơn 2 đợi 1s, Đơn 3 đợi 2s...
-                setTimeout(() => {
-                    addTerminalLog(`[AUTO-ASSIGN] Tự động gán đơn ${poIdStr} cho nhóm [${config.group}]`, 'info');
-                    assignOrderGroup(poIdStr, config.group, true);
-                }, index * 1000); 
-            }
-        });
-    }
-}
-
-function assignOrderGroup(orderId, groupName, isSilent = false) { 
-    let orderIdStr = String(orderId);
-    fetch('/api/assign_group', { 
-        method: 'POST', 
-        headers: { 'Content-Type': 'application/json' }, 
-        body: JSON.stringify({ order_id: orderIdStr, group_name: groupName }) 
-    }).then(r => r.json()).then(d => { 
-        if (d.status === 'success') { 
-            globalAssignments[orderIdStr] = groupName; 
-            if(!isSilent) Toast.fire({ icon: 'success', title: 'Đã gán nhóm!' }); 
-            assigningOrders.delete(orderIdStr); // Xong việc thì mở khóa
-            syncOrderStateToBackend(); 
-            renderDashboardUI(); 
-        } else { 
-            assigningOrders.delete(orderIdStr); // Lỗi cũng phải mở khóa
-            if(!isSilent) showErrorToast('Lỗi gán: ' + d.message); 
-            else addTerminalLog(`[AUTO-ASSIGN] Lỗi gán đơn ${orderIdStr}: ${d.message}`, 'error');
-        } 
-    }).catch(e => {
-        assigningOrders.delete(orderIdStr);
-        if(!isSilent) showErrorToast('Lỗi mạng khi gán!'); 
-        else addTerminalLog(`[AUTO-ASSIGN] Lỗi mạng khi gán đơn ${orderIdStr}: ${e.message}`, 'error');
-    }); 
-}
 // ====== AUTO TẠO QC BÁN ======
 function toggleAutoCreateSellAd(isChecked) {
     let config = JSON.parse(localStorage.getItem('autoCreateSellAdConfig') || '{"enabled":false}');
@@ -590,11 +519,6 @@ function loadBuyAdsDashboard(isSilent = false) {
             }
             // =======================================================
 
-            if(data.assignments) {
-                // SỬA LỖI GHI ĐÈ: Trộn dữ liệu mới vào dữ liệu cũ thay vì xóa sạch (Object.assign)
-                // Giúp giữ lại các đơn vừa gán thành công nhưng API 30s chưa kịp kéo về
-                Object.assign(globalAssignments, data.assignments);
-            }            
             // Lấy danh sách ID đơn đã ép lưu trữ từ LocalStorage
             let forceArchivedSet = new Set(JSON.parse(localStorage.getItem('forceArchivedOrders') || '[]'));
 
@@ -677,7 +601,6 @@ function loadBuyAdsDashboard(isSilent = false) {
             Object.keys(currentSellObjects).forEach(id => { globalActiveSellOrders[id] = currentSellObjects[id]; if (globalArchivingSellOrders[id]) delete globalArchivingSellOrders[id]; });
 
             renderDashboardUI();
-            processAutoAssign();
             processAutoCreateSellAds();
             processAutoCancelAdsForCancelledOrders();
             processAutoStopAds(); // Đã thêm ở đây
@@ -727,9 +650,6 @@ function generateSellOrderHtml(spo, isArchiving, isArchiveView = false) {
         paymentCountdownHtml = `<span class="text-danger fw-bold ms-1 payment-countdown" data-expire="${expireTime}">${m}:${s}</span>`;
     }
     
-    const currentAssign = globalAssignments[spo.id] || ""; 
-    let assignHtml = isArchiveView ? '<div class="text-muted fw-bold" style="font-size: 0.85rem;">GÁN NHÓM</div><div class="badge bg-light text-dark border w-100 mt-1 py-1 text-wrap" style="font-size: 0.85rem;">' + (currentAssign || 'Chưa gán') + '</div>' : '<div class="text-muted fw-bold mb-1 text-center" style="font-size: 0.85rem;">GÁN NHÓM</div><select class="form-select form-select-sm border-secondary fw-bold text-dark shadow-sm" onchange="assignOrderGroup(\'' + spo.id + '\', this.value)"><option value="">-- Chưa gán --</option>' + globalAllGroups.map(g => '<option value="' + g + '" ' + (g===currentAssign?'selected':'') + '>' + g + '</option>').join('') + '</select>'; 
-
     let confirmedBadge = ''; 
     if (globalConfirmedOrders[spo.id]) { confirmedBadge = '<div class="mt-2 d-flex align-items-center gap-1"><div class="badge bg-success text-white border border-success flex-grow-1 py-2 shadow-sm" style="font-size: 0.85rem;"><i class="bi bi-check-circle-fill"></i> ĐÃ XN</div><button class="btn btn-sm btn-outline-danger shadow-sm" style="font-size: 0.85rem;" onclick="unconfirmOrder(\'' + spo.id + '\')"><i class="bi bi-x-lg"></i></button></div>'; } 
     else { confirmedBadge = '<div class="mt-2"><button class="btn btn-sm btn-primary w-100 py-1 shadow-sm fw-bold" style="font-size: 0.85rem;" onclick="confirmOrder(\'' + spo.id + '\')"><i class="bi bi-check2-square"></i> XÁC NHẬN</button></div>'; }
@@ -773,7 +693,7 @@ function generateSellOrderHtml(spo, isArchiving, isArchiveView = false) {
                 diffUHtml +
             '</div>' +
         '</div>' +
-        '<div class="col-sm-3 px-2 text-center">' + assignHtml + confirmedBadge + '</div>' +
+        '<div class="col-sm-3 px-2 text-center">' + confirmedBadge + '</div>' +
     '</div>';
     
     return '<div class="border-top border-danger border-opacity-50">' + bodyHtml + '</div>';
@@ -825,8 +745,6 @@ function generateOrderRowHtml(po, cfg, isArchiving, isArchiveView = false) {
             </div>
         `;
     }
-
-    const currentAssign = globalAssignments[po.id] || ""; let assignHtml = isArchiveView ? '<div class="text-muted fw-bold" style="font-size: 0.85rem;">GÁN NHÓM</div><div class="badge bg-light text-dark border w-100 mt-1 py-1 text-wrap" style="font-size: 0.85rem;">' + (currentAssign || 'Chưa gán') + '</div>' : '<div class="text-muted fw-bold mb-1 text-center" style="font-size: 0.85rem;">GÁN NHÓM</div><select class="form-select form-select-sm border-secondary fw-bold text-dark shadow-sm" onchange="assignOrderGroup(\'' + po.id + '\', this.value)"><option value="">-- Chưa gán --</option>' + globalAllGroups.map(g => '<option value="' + g + '" ' + (g === currentAssign ? 'selected' : '') + '>' + g + '</option>').join('') + '</select>';
 
     let confirmedBadge = ''; let linkedAdHtml = ''; let sellOrdersHtml = '';
     
@@ -931,11 +849,11 @@ function generateOrderRowHtml(po, cfg, isArchiving, isArchiveView = false) {
                     '<div class="text-success fw-bold mt-1">Số lượng: ' + usdt + ' ' + (cfg.coin||'USDT') + '</div>' +
                 '</div>' +
             '</div>' +
-            '<div class="col-sm-2 px-2">' + assignHtml + confirmedBadge + '</div>' +
+            '<div class="col-sm-2 px-2">' + confirmedBadge + '</div>' +
         '</div>'; 
     } else {
         headerHtml = '<div class="bg-danger bg-opacity-25 text-dark px-3 py-2 fw-bold border-bottom border-danger d-flex justify-content-between align-items-center" style="font-size: 0.85rem;"><div><i class="bi bi-link-45deg me-1"></i> ĐƠN PENDING BÁN: <span class="copy-id text-danger user-select-all" onclick="copyAdId(\'' + po.id + '\')">' + po.id + '</span> <span class="badge bg-danger ms-2">BÁN</span></div><div class="text-end"><i class="bi bi-robot text-danger"></i> ' + po.account_name + '<br><span class="text-secondary fw-normal" style="font-size: 0.75rem;"><i class="bi bi-calendar-plus"></i> Thời gian tạo: ' + createTimeStr + '</span></div></div>';
-        bodyHtml = '<div class="row align-items-center g-3 p-3 m-0" style="font-size: 0.85rem;"><div class="col-sm-3 border-end border-light px-2"><div class="text-danger fw-bold"><i class="bi bi-credit-card"></i> ' + (po.payment_method_name||'N/A') + '</div><div class="mt-2">' + sb + '</div><div class="text-danger mt-2 fw-semibold"><i class="bi bi-clock"></i> Còn: ' + paymentCountdownHtml + '</div>' + archiveHtml + '</div><div class="col-sm-3 text-sm-center border-end border-light px-2"><div class="text-danger fw-bold">Giá: ' + fPrice + ' <span class="text-secondary fw-normal">' + (po.currencyId||cfg.fiat) + '/' + (po.tokenId||cfg.coin) + '</span></div></div><div class="col-sm-3 text-sm-center border-end border-light px-2"><div class="fw-semibold text-dark mb-1">Số Tiền Giao Dịch</div><div class="bg-white border border-danger rounded shadow-sm text-dark mx-auto text-start px-3 py-2" style="width: fit-content;">Số tiền: <b class="text-danger">' + fAmount + ' ' + (po.currencyId||cfg.fiat) + '</b><br>Số lượng: <b class="text-success">' + usdt + ' ' + (po.tokenId||cfg.coin) + '</b></div></div><div class="col-sm-3 px-2 text-center">' + assignHtml + confirmedBadge + '</div></div>';
+        bodyHtml = '<div class="row align-items-center g-3 p-3 m-0" style="font-size: 0.85rem;"><div class="col-sm-3 border-end border-light px-2"><div class="text-danger fw-bold"><i class="bi bi-credit-card"></i> ' + (po.payment_method_name||'N/A') + '</div><div class="mt-2">' + sb + '</div><div class="text-danger mt-2 fw-semibold"><i class="bi bi-clock"></i> Còn: ' + paymentCountdownHtml + '</div>' + archiveHtml + '</div><div class="col-sm-3 text-sm-center border-end border-light px-2"><div class="text-danger fw-bold">Giá: ' + fPrice + ' <span class="text-secondary fw-normal">' + (po.currencyId||cfg.fiat) + '/' + (po.tokenId||cfg.coin) + '</span></div></div><div class="col-sm-3 text-sm-center border-end border-light px-2"><div class="fw-semibold text-dark mb-1">Số Tiền Giao Dịch</div><div class="bg-white border border-danger rounded shadow-sm text-dark mx-auto text-start px-3 py-2" style="width: fit-content;">Số tiền: <b class="text-danger">' + fAmount + ' ' + (po.currencyId||cfg.fiat) + '</b><br>Số lượng: <b class="text-success">' + usdt + ' ' + (po.tokenId||cfg.coin) + '</b></div></div><div class="col-sm-3 px-2 text-center">' + confirmedBadge + '</div></div>';
     }
 
     return '<div class="list-group-item ' + (isArchiving ? "archiving-list-item" : "pending-list-item") + ' p-0 mb-3 border rounded shadow-sm overflow-hidden" style="border-width: 2px !important; ' + (String(po.side)==='0'?'border-color: #ffc107 !important;':'border-color: #dc3545 !important;') + '">' + headerHtml + bodyHtml + linkedAdHtml + sellOrdersHtml + '</div>';
@@ -1215,16 +1133,10 @@ function checkAndRunAutoUpdates() {
 function renderDashboardUI() {
     const content = document.getElementById('dashboardAdsContent'); const group = document.getElementById('groupSelect').value;
     if(latestConfigs.length === 0) { content.innerHTML = '<div class="text-warning small fst-italic">Chưa có cấu hình.</div>'; content.style.display = 'block'; return; }
-    
-    let unassignedCount = 0;
-    if (globalAllPendingOrders && globalAllPendingOrders.length > 0) {
-        unassignedCount = globalAllPendingOrders.filter(po => !globalAssignments[po.id]).length;
-    }
 
     let html = ''; 
 
     // --- PANEL ĐIỀU KHIỂN AUTO ---
-    let autoAssignConfig = JSON.parse(localStorage.getItem('autoAssignConfig') || '{"enabled":false, "group":""}');
     let autoSellConfig = JSON.parse(localStorage.getItem('autoCreateSellAdConfig') || '{"enabled":false}');
     let autoStopAdsConfig = JSON.parse(localStorage.getItem('autoStopAdsConfig') || '{"perConfigLimit":false, "xValue":3, "globalLimit":false, "yValue":10, "autoResume":false}');
     
@@ -1246,14 +1158,8 @@ function renderDashboardUI() {
     html += `<div class="card mb-3 shadow-sm border-info bg-light">
         <div class="card-body py-2 px-3 d-flex flex-wrap justify-content-between align-items-center gap-2">
             <div class="d-flex flex-wrap align-items-center gap-3">
-                <!-- Công tắc Gán Nhóm (Thu nhỏ) -->
-                <div class="form-check form-switch m-0 d-flex align-items-center gap-1">
-                    <input class="form-check-input m-0 border-info" type="checkbox" id="autoAssignSwitch" ${autoAssignConfig.enabled ? 'checked' : ''} onchange="toggleAutoAssign(this.checked)">
-                    <label class="form-check-label fw-bold text-dark" for="autoAssignSwitch" style="cursor: pointer; font-size: 0.8rem;">Auto gán nhóm</label>
-                </div>
-                
                 <!-- Công tắc Tạo QC Bán (Thu nhỏ) -->
-                <div class="form-check form-switch m-0 d-flex align-items-center gap-1 border-start border-secondary ps-2">
+                <div class="form-check form-switch m-0 d-flex align-items-center gap-1">
                     <input class="form-check-input m-0 border-warning" type="checkbox" id="autoCreateSellSwitch" ${autoSellConfig.enabled ? 'checked' : ''} onchange="toggleAutoCreateSellAd(this.checked)">
                     <label class="form-check-label fw-bold text-dark" for="autoCreateSellSwitch" style="cursor: pointer; font-size: 0.8rem;">Auto tạo QC Bán</label>
                 </div>
@@ -1325,28 +1231,8 @@ function renderDashboardUI() {
                     </ul>
                 </div>
             </div>
-            
-            <div class="d-flex align-items-center gap-1">
-                <select class="form-select form-select-sm border-info fw-bold text-primary shadow-sm" style="width: auto; min-width: 100px; font-size: 0.8rem;" onchange="changeAutoAssignGroup(this.value)" ${!autoAssignConfig.enabled ? 'disabled' : ''}>
-                    <option value="">-- Chọn nhóm --</option>
-                    ${globalAllGroups.map(g => `<option value="${g}" ${g === autoAssignConfig.group ? 'selected' : ''}>${g}</option>`).join('')}
-                </select>
-            </div>
         </div>
     </div>`;
-
-    // --- HIỂN THỊ THANH CẢNH BÁO TRÊN CÙNG ---
-    if (unassignedCount > 0) {
-        html += `<div class="alert alert-danger py-2 mb-4 fw-bold shadow-sm d-flex align-items-center" style="font-size: 0.95rem;">
-            <i class="bi bi-exclamation-triangle-fill fs-5 me-2"></i> 
-            CHÚ Ý: Đang có <span class="text-dark fs-5 mx-1 mx-2 text-decoration-underline">${unassignedCount}</span> đơn CHƯA ĐƯỢC GÁN NHÓM (Chưa phân phối)!
-        </div>`;
-    } else {
-        html += `<div class="alert alert-success py-2 mb-4 fw-bold shadow-sm d-flex align-items-center" style="font-size: 0.95rem;">
-            <i class="bi bi-check-circle-fill fs-5 me-2"></i> 
-            Tuyệt vời: 100% các đơn đều đã được phân phối gán nhóm!
-        </div>`;
-    }
 
     const allPendingOrders = [...Object.values(globalActiveOrders), ...Object.values(globalArchivingOrders)];
     

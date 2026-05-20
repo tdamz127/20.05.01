@@ -46,11 +46,6 @@ class AdConfig(db.Model):
     remark = db.Column(db.Text)
     trading_prefs = db.Column(db.Text)
 
-class OrderAssignment(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    order_id = db.Column(db.String(100), unique=True, nullable=False)
-    assigned_group = db.Column(db.String(100), nullable=True)
-
 class LinkedSellAd(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     order_id = db.Column(db.String(100), unique=True, nullable=False)
@@ -181,7 +176,6 @@ def get_buy_ads_dashboard():
     if not group_name: return jsonify({"status": "error", "message": "Thiếu nhóm"}), 400
     try:
         configs, raw_ads, raw_pending_orders = [], [], []
-        assignments = {a.order_id: a.assigned_group for a in OrderAssignment.query.all()}
         confirmed_db = ConfirmedOrder.query.all()
         confirmed_orders_dict = {str(c.order_id): True for c in confirmed_db}
 
@@ -404,7 +398,6 @@ def get_buy_ads_dashboard():
             "all_pending_orders": raw_pending_orders,
             "buy_ads": buy_ads, 
             "pending_orders": pending_orders, 
-            "assignments": assignments,
             "confirmed_orders": confirmed_orders_dict,
             "linked_sell_ads": linked_ads_data,
             "linked_sell_orders": linked_sell_orders_data,
@@ -698,18 +691,6 @@ def auto_create_ad():
     if is_success: return jsonify({"status": "success", "message": success_msg, "logs": logs})
     return jsonify({"status": "error", "message": "Tạo QC thất bại.", "logs": logs}), 400
 
-@app.route('/api/assign_group', methods=['POST'])
-def assign_group():
-    data = request.json
-    order_id, group_name = data.get('order_id'), data.get('group_name')
-    try:
-        record = OrderAssignment.query.filter_by(order_id=str(order_id)).first()
-        if not record: db.session.add(OrderAssignment(order_id=str(order_id), assigned_group=group_name))
-        else: record.assigned_group = group_name
-        db.session.commit()
-        return jsonify({"status": "success", "message": "Đã gán nhóm thành công"})
-    except Exception as e: return jsonify({"status": "error", "message": str(e)}), 500
-
 @app.route('/api/sync_front_state', methods=['POST'])
 def sync_front_state():
     global ACTIVE_ORDERS_REGISTRY
@@ -727,14 +708,13 @@ def sync_front_state():
 @app.route('/api/export_orders', methods=['GET'])
 def export_orders():
     try:
-        assigns = {a.order_id: a.assigned_group for a in OrderAssignment.query.all()}
         confirmed_db = ConfirmedOrder.query.all()
         confirmed_orders_dict = {str(c.order_id): True for c in confirmed_db}
         export_data = []
         for oid, odata in ACTIVE_ORDERS_REGISTRY.items():
             export_data.append({
                 "order_id": oid, "owner_account": odata.get('owner_account'),
-                "owner_group": odata.get('owner_group'), "assigned_group": assigns.get(oid, ""),
+                "owner_group": odata.get('owner_group'),
                 "status": odata.get('status'), "is_confirmed": confirmed_orders_dict.get(oid, False)
             })
         return jsonify({"status": "success", "total": len(export_data), "data": export_data})
